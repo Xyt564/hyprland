@@ -1,87 +1,74 @@
 #!/bin/bash
-
 set -e
 
-echo "[+] Updating system..."
-sudo pacman -Syu --noconfirm
+DEVICE="/dev/sda"
+USERNAME="user"
+USERPASS="yourpassword"     # Change this before running!
+ROOTPASS="rootpassword"     # Change this before running!
+TIMEZONE="Europe/London"
+LOCALE="en_GB.UTF-8"
+HOSTNAME="archvm"
 
-echo "[+] Installing core packages..."
-sudo pacman -S --noconfirm base-devel git wget curl unzip \
-  pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-hyprland \
-  wl-clipboard grim slurp wf-recorder brightnessctl \
-  kitty waybar wofi hyprpaper dunst thunar pavucontrol \
-  neofetch btop ranger zsh unzip
+echo "Starting fully automated Arch Linux install with Hyprland..."
 
-echo "[+] Installing nerd fonts (JetBrainsMono)..."
-sudo pacman -S --noconfirm ttf-jetbrains-mono-nerd
+timedatectl set-ntp true
 
-echo "[+] Installing yay (AUR helper)..."
-cd /opt
-sudo git clone https://aur.archlinux.org/yay.git
-sudo chown -R $USER:$USER yay
-cd yay && makepkg -si --noconfirm
+echo "Partitioning disk..."
+echo -e "o\nn\np\n1\n\n+19G\nn\np\n2\n\n+1G\nn\np\n3\n\n\nw" | fdisk $DEVICE
 
-echo "[+] Installing Hyprland from AUR..."
-yay -S hyprland-git ly-git --noconfirm
+echo "Formatting partitions..."
+mkfs.ext4 ${DEVICE}1
+mkswap ${DEVICE}2
+mkfs.ext4 ${DEVICE}3
 
-echo "[+] Enabling login manager (ly)..."
-sudo systemctl enable ly.service
+echo "Mounting partitions..."
+mount ${DEVICE}1 /mnt
+mkdir /mnt/boot
+mount ${DEVICE}3 /mnt/boot
+swapon ${DEVICE}2
 
-echo "[+] Creating config directories..."
-mkdir -p ~/.config/{hypr,kitty,waybar,wofi,dunst,wallpapers}
+echo "Installing base system and Hyprland dependencies..."
+pacstrap /mnt base linux linux-firmware nano networkmanager sudo \
+xorg-xwayland xorg-xlsclients wlroots wayland-protocols libinput \
+mako grim slurp foot swaybg swaylock waybar polkit-gnome xdg-desktop-portal-wlr \
+grub
 
-echo "[+] Downloading Matrix-style wallpaper..."
-wget -O ~/.config/wallpapers/matrix.jpg https://wallpaperaccess.com/full/1642704.jpg
+echo "Generating fstab..."
+genfstab -U /mnt >> /mnt/etc/fstab
 
-echo "[+] Writing Hyprland config..."
-cat <<EOF > ~/.config/hypr/hyprland.conf
-exec-once = waybar &
-exec-once = hyprpaper &
-exec-once = dunst &
-exec-once = nm-applet &
-exec-once = neofetch
+echo "Configuring system..."
+arch-chroot /mnt /bin/bash <<EOF
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+hwclock --systohc
 
-$mod = SUPER
+echo "$LOCALE UTF-8" >> /etc/locale.gen
+locale-gen
+echo "LANG=$LOCALE" > /etc/locale.conf
 
-monitor = eDP-1,preferred,auto,1
+echo "$HOSTNAME" > /etc/hostname
 
-input {
-  kb_layout = us
-}
+cat <<HOSTS >> /etc/hosts
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+HOSTS
 
-bind = $mod, RETURN, exec, kitty
-bind = $mod, Q, killactive,
-bind = $mod, E, exec, thunar
-bind = $mod, R, exec, wofi --show run
-bind = $mod SHIFT, E, exit,
+echo "root:$ROOTPASS" | chpasswd
+
+grub-install --target=i386-pc $DEVICE
+grub-mkconfig -o /boot/grub/grub.cfg
+
+systemctl enable NetworkManager
+
+useradd -m -G wheel -s /bin/bash $USERNAME
+echo "$USERNAME:$USERPASS" | chpasswd
+
+sed -i 's/^# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers
+
+mkdir -p /home/$USERNAME
+echo "exec Hyprland" > /home/$USERNAME/.xinitrc
+chown $USERNAME:$USERNAME /home/$USERNAME/.xinitrc
+
 EOF
 
-echo "[+] Writing Hyprpaper config..."
-cat <<EOF > ~/.config/hypr/hyprpaper.conf
-preload = ~/.config/wallpapers/matrix.jpg
-wallpaper = eDP-1,~/.config/wallpapers/matrix.jpg
-EOF
-
-echo "[+] Writing kitty config..."
-cat <<EOF > ~/.config/kitty/kitty.conf
-font_family JetBrainsMono Nerd Font
-background_opacity 0.9
-background #000000
-foreground #00FF00
-cursor #00FF00
-selection_foreground #000000
-selection_background #00FF00
-EOF
-
-echo "[+] Writing Dunst config..."
-cat <<EOF > ~/.config/dunst/dunstrc
-[global]
-    background = "#111111"
-    foreground = "#00ff00"
-    frame_color = "#00ff00"
-    font = JetBrainsMono Nerd Font 10
-EOF
-
-echo "[+] Setup complete!"
-echo ">> Reboot and you'll be greeted with ly (login manager)"
-echo ">> Then log in and type: Hyprland"
+echo "Installation complete! Reboot now and log in as $USERNAME."
